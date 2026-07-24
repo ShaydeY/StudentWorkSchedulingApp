@@ -1,0 +1,19 @@
+
+> scheduling-app@0.1.0 dev
+> next dev
+
+▲ Next.js 16.2.11 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.200.1:3000
+✓ Ready in 1896ms
+Creating turbopack project {
+  dir: 'C:\\Users\\shadytree\\OneDrive - BYU-Hawaii\\AI Projects\\SchedulingApp',
+  testMode: true
+}
+
+  We detected TypeScript in your project and reconfigured your tsconfig.json file for you.
+  The following suggested values were added to your tsconfig.json. These values can be changed to fit your project's needs:
+
+  	- include was updated to add '.next/dev/types/**/*.ts'
+
+
