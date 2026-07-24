@@ -19,9 +19,9 @@ export default function Home() {
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand-mark">S</span>
+          <span className="brand-mark">C&amp;C</span>
           <div>
-            <strong>Shiftline</strong>
+            <strong>Class &amp; Clock</strong>
             <small>IT Operations</small>
           </div>
         </div>

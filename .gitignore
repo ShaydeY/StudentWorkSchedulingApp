@@ -6,3 +6,6 @@ node_modules/
 .env
 .env.local
 .env.*.local
+
+# Local development server output
+.dev-server*.log

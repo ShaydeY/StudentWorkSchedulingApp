@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import "../public/interactive.css";
 
 const geist = Geist({
   variable: "--font-sans",
@@ -13,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Shiftline — Student Scheduling",
+  title: "Class & Clock — Student Scheduling",
   description: "Create viable student work schedules around class commitments.",
 };
 
