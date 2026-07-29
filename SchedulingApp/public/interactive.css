@@ -14,6 +14,15 @@
 .calendar { position: relative; }
 .day-column > i { height: 32px; border-bottom: 1px solid rgb(206 211 214 / 72%); }
 .day-column > i.half { border-bottom-color: rgb(206 211 214 / 36%); }
+.day-column > i.outside-hours {
+  background: repeating-linear-gradient(
+    -45deg,
+    rgb(206 211 214 / 30%) 0,
+    rgb(206 211 214 / 30%) 5px,
+    rgb(206 211 214 / 12%) 5px,
+    rgb(206 211 214 / 12%) 10px
+  );
+}
 .shift { min-height: 42px; user-select: none; }
 .shift.invalid { border-color: var(--crimson); box-shadow: inset 3px 0 var(--crimson); }
 .shift em {

@@ -571,11 +571,17 @@ function ScheduleGrid({
   onResize: (event: ReactPointerEvent, shift: WorkShift) => void;
   onDelete: (id: string) => void;
 }) {
-  const hours = Array.from(
-    { length: settings.dayEnd - settings.dayStart + 1 },
-    (_, index) => settings.dayStart + index,
+  const displayPadding = 1;
+  const displayStart = Math.max(0, settings.dayStart - displayPadding);
+  const displayEnd = Math.min(24, settings.dayEnd + displayPadding);
+  const slotCount = Math.round((displayEnd - displayStart) / SNAP);
+  const timeLabels = Array.from(
+    { length: slotCount + 1 },
+    (_, index) => displayStart + index * SNAP,
+  ).filter(
+    (time) => time === displayStart || time === displayEnd || Number.isInteger(time),
   );
-  const gridHeight = (settings.dayEnd - settings.dayStart) * PIXELS_PER_HOUR;
+  const gridHeight = (displayEnd - displayStart) * PIXELS_PER_HOUR;
 
   return (
     <section className="calendar-card">
@@ -583,55 +589,71 @@ function ScheduleGrid({
         <div><strong>Standard work week</strong></div>
         <div className="week-label">Monday–Friday <span>•</span> 30-minute increments</div>
       </div>
-      <div className="calendar" style={{ gridTemplateRows: `42px ${gridHeight}px` }}>
-        <div className="corner" />
-        {DAYS.map((day) => <div className="day-head" key={day}>{day.slice(0, 3).toUpperCase()}</div>)}
-        <div className="time-column">
-          {hours.map((hour) => <span key={hour} style={{ top: (hour - settings.dayStart) * PIXELS_PER_HOUR }}>{formatTime(hour).replace(":00", "")}</span>)}
-        </div>
-        {DAYS.map((_, dayIndex) => (
-          <div
-            className="day-column"
-            key={dayIndex}
-            style={{ height: gridHeight }}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              event.preventDefault();
-              const id = event.dataTransfer.getData("text/shift-id");
-              const rect = event.currentTarget.getBoundingClientRect();
-              const offset = Math.max(0, Math.min(gridHeight, event.clientY - rect.top));
-              const start = settings.dayStart + Math.round((offset / PIXELS_PER_HOUR) / SNAP) * SNAP;
-              if (id) onMove(id, dayIndex as WorkDay, start);
-            }}
-          >
-            {Array.from({ length: (settings.dayEnd - settings.dayStart) * 2 }).map((_, index) => <i className={index % 2 ? "half" : ""} key={index} />)}
-            {shifts.filter((shift) => shift.day === dayIndex).map((shift) => {
-              const student = studentFor(shift.studentId);
-              const warnings = shiftWarnings(shift, shifts, classBlocks, settings);
-              return (
-                <article
-                  draggable
-                  onDragStart={(event) => event.dataTransfer.setData("text/shift-id", shift.id)}
-                  className={`shift ${student?.color ?? "blue"} ${warnings.length ? "invalid" : ""}`}
-                  key={shift.id}
-                  style={{
-                    top: (shift.start - settings.dayStart) * PIXELS_PER_HOUR + 3,
-                    height: duration(shift) * PIXELS_PER_HOUR - 6,
-                  }}
-                  title={warnings.length ? warnings.join(", ") : "Drag to move this shift"}
-                >
-                  <strong>{student?.name ?? "Unknown"}</strong>
-                  <span>{formatTime(shift.start)} – {formatTime(shift.end)}</span>
-                  {warnings.length > 0 && <em>! {warnings[0]}</em>}
-                  <button className="shift-delete" onClick={() => onDelete(shift.id)} aria-label="Delete shift">×</button>
-                  <button className="resize-handle" onPointerDown={(event) => onResize(event, shift)} aria-label="Resize shift">•••</button>
-                </article>
-              );
-            })}
+      <div className="calendar-scroll">
+        <div className="calendar" style={{ gridTemplateRows: `42px ${gridHeight}px` }}>
+          <div className="corner" />
+          {DAYS.map((day) => <div className="day-head" key={day}>{day.slice(0, 3).toUpperCase()}</div>)}
+          <div className="time-column">
+            {timeLabels.map((time) => (
+              <span key={time} style={{ top: (time - displayStart) * PIXELS_PER_HOUR }}>
+                {formatTime(time).replace(":00", "")}
+              </span>
+            ))}
           </div>
-        ))}
+          {DAYS.map((_, dayIndex) => (
+            <div
+              className="day-column"
+              key={dayIndex}
+              style={{ height: gridHeight }}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                const id = event.dataTransfer.getData("text/shift-id");
+                const rect = event.currentTarget.getBoundingClientRect();
+                const offset = Math.max(0, Math.min(gridHeight, event.clientY - rect.top));
+                const start = displayStart + Math.round((offset / PIXELS_PER_HOUR) / SNAP) * SNAP;
+                if (id) onMove(id, dayIndex as WorkDay, start);
+              }}
+            >
+              {Array.from({ length: slotCount }).map((_, index) => {
+                const slotStart = displayStart + index * SNAP;
+                const outsideWorkHours =
+                  slotStart < settings.dayStart || slotStart >= settings.dayEnd;
+                return (
+                  <i
+                    className={`${index % 2 ? "half" : ""} ${outsideWorkHours ? "outside-hours" : ""}`}
+                    key={index}
+                  />
+                );
+              })}
+              {shifts.filter((shift) => shift.day === dayIndex).map((shift) => {
+                const student = studentFor(shift.studentId);
+                const warnings = shiftWarnings(shift, shifts, classBlocks, settings);
+                return (
+                  <article
+                    draggable
+                    onDragStart={(event) => event.dataTransfer.setData("text/shift-id", shift.id)}
+                    className={`shift ${student?.color ?? "blue"} ${warnings.length ? "invalid" : ""}`}
+                    key={shift.id}
+                    style={{
+                      top: (shift.start - displayStart) * PIXELS_PER_HOUR + 3,
+                      height: duration(shift) * PIXELS_PER_HOUR - 6,
+                    }}
+                    title={warnings.length ? warnings.join(", ") : "Drag to move this shift"}
+                  >
+                    <strong>{student?.name ?? "Unknown"}</strong>
+                    <span>{formatTime(shift.start)} – {formatTime(shift.end)}</span>
+                    {warnings.length > 0 && <em>! {warnings[0]}</em>}
+                    <button className="shift-delete" onClick={() => onDelete(shift.id)} aria-label="Delete shift">×</button>
+                    <button className="resize-handle" onPointerDown={(event) => onResize(event, shift)} aria-label="Resize shift">•••</button>
+                  </article>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+        {!shifts.length && <div className="calendar-empty"><strong>No work shifts yet</strong><span>Generate a schedule or add a shift manually.</span></div>}
       </div>
-      {!shifts.length && <div className="calendar-empty"><strong>No work shifts yet</strong><span>Generate a schedule or add a shift manually.</span></div>}
     </section>
   );
 }
