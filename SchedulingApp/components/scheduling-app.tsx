@@ -10,6 +10,7 @@ import {
 } from "react";
 import { demoData } from "@/lib/demo-data";
 import {
+  MAX_CONSECUTIVE_HOURS,
   coverageSummary,
   generateSchedule,
   shiftWarnings,
@@ -36,10 +37,13 @@ type Modal = "shift" | "student" | "class" | null;
 
 const COLORS: StudentColor[] = ["coral", "blue", "green", "purple", "gold"];
 const PIXELS_PER_HOUR = 64;
-const SNAP = 0.5;
+const SNAP = 0.25;
 
 function timeOptions(start = 6, end = 21) {
-  return Array.from({ length: (end - start) * 2 + 1 }, (_, index) => start + index * 0.5);
+  return Array.from(
+    { length: Math.round((end - start) / SNAP) + 1 },
+    (_, index) => Number((start + index * SNAP).toFixed(2)),
+  );
 }
 
 export default function SchedulingApp() {
@@ -230,19 +234,49 @@ export default function SchedulingApp() {
     if (error) setNotice(`Delete failed: ${error.message}`);
   }
 
-  function studentFor(id: string) {
-    return students.find((student) => student.id === id);
-  }
-
   function makeSchedule() {
     const generated = generateSchedule(students, classBlocks, settings);
     const summary = coverageSummary(generated, settings);
+    const activeStudents = students.filter((student) => student.active);
+    const missingDailyAssignments = activeStudents.reduce(
+      (total, student) =>
+        total +
+        DAYS.filter(
+          (_, day) =>
+            !generated.some(
+              (shift) => shift.studentId === student.id && shift.day === (day as WorkDay),
+            ),
+        ).length,
+      0,
+    );
+    const weeklyShortfalls = activeStudents
+      .map((student) =>
+        Math.max(0, settings.maxWeeklyHours - weeklyHours(student.id, generated)),
+      )
+      .filter((shortfall) => shortfall > 0);
+    const issues: string[] = [];
+    if (summary.gapHours > 0) {
+      issues.push(`${summary.gapHours} open coverage hours`);
+    }
+    if (missingDailyAssignments > 0) {
+      issues.push(`${missingDailyAssignments} student-day assignments could not fit`);
+    }
+    if (weeklyShortfalls.length > 0) {
+      const shortfallHours = weeklyShortfalls.reduce(
+        (total, shortfall) => total + shortfall,
+        0,
+      );
+      issues.push(
+        `${weeklyShortfalls.length} students below the weekly target (${shortfallHours} hours short)`,
+      );
+    }
+
     setShifts(generated);
     void replaceSavedShifts(generated);
     setNotice(
-      summary.percent === 100
-        ? "Full coverage generated"
-        : `Best viable schedule generated — ${summary.gapHours} open hours remain`,
+      issues.length
+        ? `Best viable schedule generated \u2014 ${issues.join(" \u2022 ")}`
+        : "Full coverage generated - every active student scheduled each weekday",
     );
     setTab("schedule");
   }
@@ -264,15 +298,27 @@ export default function SchedulingApp() {
   function beginResize(event: ReactPointerEvent, shift: WorkShift) {
     event.preventDefault();
     event.stopPropagation();
-    const initialY = event.clientY;
+    const initialX = event.clientX;
     const initialEnd = shift.end;
+    const displayStart = Math.max(0, settings.dayStart - 1);
+    const displayEnd = Math.min(24, settings.dayEnd + 1);
+    const displaySpan = displayEnd - displayStart;
+    const timelineWidth =
+      event.currentTarget.closest(".student-timeline")?.getBoundingClientRect().width ??
+      displaySpan * PIXELS_PER_HOUR;
 
     function onMove(moveEvent: PointerEvent) {
       const delta =
-        Math.round(((moveEvent.clientY - initialY) / PIXELS_PER_HOUR) / SNAP) * SNAP;
+        Math.round(
+          (((moveEvent.clientX - initialX) / Math.max(1, timelineWidth)) * displaySpan) / SNAP,
+        ) * SNAP;
       const nextEnd = Math.max(
         shift.start + settings.minShiftHours,
-        Math.min(settings.dayEnd, initialEnd + delta),
+        Math.min(
+          settings.dayEnd,
+          shift.start + MAX_CONSECUTIVE_HOURS,
+          initialEnd + delta,
+        ),
       );
       setShifts((current) =>
         current.map((item) => (item.id === shift.id ? { ...item, end: nextEnd } : item)),
@@ -316,6 +362,13 @@ export default function SchedulingApp() {
     const start = Number(form.get("start"));
     const end = Number(form.get("end"));
     if (!studentId || end <= start) return;
+    if (end - start > MAX_CONSECUTIVE_HOURS) {
+      setNotice(
+        `Shift not added - students cannot work more than ${MAX_CONSECUTIVE_HOURS} consecutive hours`,
+      );
+      setModal(null);
+      return;
+    }
     const block: ClassBlock = {
       id: crypto.randomUUID(), studentId, day, start, end, label: "Class",
     };
@@ -365,7 +418,7 @@ export default function SchedulingApp() {
   }
 
   const titles: Record<Tab, [string, string]> = {
-    schedule: ["Work schedule", "Build around class commitments, then fine-tune by hand."],
+    schedule: ["Work schedule", "Review one day at a time across the active student roster."],
     students: ["Students", "Manage the students who can be assigned to work."],
     classes: ["Class blocks", "Record times when each student is unavailable."],
     settings: ["Scheduling rules", "Adjust the constraints used to build viable schedules."],
@@ -393,8 +446,10 @@ export default function SchedulingApp() {
           <span className="eyebrow">Schedule rules</span>
           <dl>
             <div><dt>Workday</dt><dd>{formatTime(settings.dayStart)}–{formatTime(settings.dayEnd)}</dd></div>
-            <div><dt>Weekly max</dt><dd>{settings.maxWeeklyHours} hours</dd></div>
+            <div><dt>Weekly target</dt><dd>{settings.maxWeeklyHours} hours</dd></div>
             <div><dt>Min. shift</dt><dd>{settings.minShiftHours} hours</dd></div>
+            <div><dt>Shift max</dt><dd>{MAX_CONSECUTIVE_HOURS} hours</dd></div>
+            <div><dt>Default days</dt><dd>Mon-Fri</dd></div>
           </dl>
         </div>
         <div className="admin">
@@ -427,13 +482,13 @@ export default function SchedulingApp() {
               <article><span>Coverage</span><strong>{coverage.percent}%</strong><small className={coverage.percent === 100 ? "positive" : "warning"}>{coverage.percent === 100 ? "Full day coverage" : `${coverage.gaps.length} gaps need attention`}</small></article>
               <article><span>Scheduled hours</span><strong>{totalHours}</strong><small>Across {students.filter((student) => weeklyHours(student.id, shifts) > 0).length} students</small></article>
               <article><span>Open time</span><strong>{coverage.gapHours}h</strong><small className={coverage.gapHours ? "warning" : "positive"}>{coverage.gapHours ? "Adjust blocks or availability" : "No open coverage"}</small></article>
-              <article className="coverage-key"><span>Coverage health</span><div><i className="healthy" /> Covered <i className="gap" /> Gap</div><small>Drag blocks to make adjustments</small></article>
+              <article className="coverage-key"><span>Coverage health</span><div><i className="healthy" /> Covered <i className="gap" /> Gap</div><small>Drag shifts horizontally to adjust times</small></article>
             </section>
             <ScheduleGrid
               classBlocks={classBlocks}
               shifts={shifts}
               settings={settings}
-              studentFor={studentFor}
+              students={students}
               onMove={moveShift}
               onResize={beginResize}
               onDelete={(id) => {
@@ -465,21 +520,67 @@ export default function SchedulingApp() {
         )}
 
         {tab === "classes" && (
-          <section className="panel">
-            <div className="table-head class-table"><span>Student</span><span>Day</span><span>Unavailable</span><span>Duration</span><span /></div>
-            {[...classBlocks].sort((a, b) => a.day - b.day || a.start - b.start).map((block) => (
-              <div className="table-row class-table" key={block.id}>
-                <div className="student-name"><i className={studentFor(block.studentId)?.color}>{studentFor(block.studentId)?.name.slice(0, 1)}</i><strong>{studentFor(block.studentId)?.name ?? "Unknown"}</strong></div>
-                <span>{DAYS[block.day]}</span>
-                <span>{formatTime(block.start)} – {formatTime(block.end)}</span>
-                <span>{block.end - block.start}h</span>
-                <button className="icon-button danger" aria-label="Delete class block" onClick={() => {
-                  setClassBlocks((current) => current.filter((item) => item.id !== block.id));
-                  void deleteRow("class_blocks", block.id);
-                }}>×</button>
-              </div>
-            ))}
-            {!classBlocks.length && <EmptyState title="No class blocks yet" body="Add unavailable times before generating a schedule." />}
+          <section className="panel class-groups-panel" aria-label="Student class blocks">
+            {students.map((student) => {
+              const studentBlocks = [...classBlocks]
+                .filter((block) => block.studentId === student.id)
+                .sort((a, b) => a.day - b.day || a.start - b.start);
+
+              return (
+                <details className="student-class-group" key={student.id}>
+                  <summary>
+                    <span className="student-name">
+                      <i className={student.color}>{student.name.slice(0, 1)}</i>
+                      <span className="class-student-copy">
+                        <strong>{student.name}</strong>
+                        <span>{student.active ? "Active student" : "Inactive student"}</span>
+                      </span>
+                    </span>
+                    <span className="class-count">
+                      {studentBlocks.length} class {studentBlocks.length === 1 ? "block" : "blocks"}
+                    </span>
+                    <span className="group-chevron" aria-hidden="true" />
+                  </summary>
+                  <div className="student-class-content">
+                    {studentBlocks.length > 0 ? (
+                      <div className="class-block-list">
+                        <div className="class-block-list-head">
+                          <span>Day</span>
+                          <span>Unavailable</span>
+                          <span>Duration</span>
+                          <span />
+                        </div>
+                        {studentBlocks.map((block) => (
+                          <div className="class-block-list-row" key={block.id}>
+                            <strong>{DAYS[block.day]}</strong>
+                            <span>{formatTime(block.start)} &ndash; {formatTime(block.end)}</span>
+                            <span>{block.end - block.start}h</span>
+                            <button
+                              className="icon-button danger"
+                              aria-label={`Delete ${student.name}'s ${DAYS[block.day]} class block`}
+                              onClick={() => {
+                                setClassBlocks((current) => current.filter((item) => item.id !== block.id));
+                                void deleteRow("class_blocks", block.id);
+                              }}
+                            >
+                              &times;
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="class-group-empty">No class blocks recorded for this student.</div>
+                    )}
+                  </div>
+                </details>
+              );
+            })}
+            {!students.length && (
+              <EmptyState
+                title="No students yet"
+                body="Add a student before entering class schedules."
+              />
+            )}
           </section>
         )}
 
@@ -489,12 +590,12 @@ export default function SchedulingApp() {
               <Field label="Starts"><select value={settings.dayStart} onChange={(event) => updateSetting("dayStart", Number(event.target.value))}>{timeOptions(6, 12).map((time) => <option value={time} key={time}>{formatTime(time)}</option>)}</select></Field>
               <Field label="Ends"><select value={settings.dayEnd} onChange={(event) => updateSetting("dayEnd", Number(event.target.value))}>{timeOptions(13, 21).map((time) => <option value={time} key={time}>{formatTime(time)}</option>)}</select></Field>
             </SettingCard>
-            <SettingCard title="Student limits" body="Control maximum hours and viable shift length.">
-              <Field label="Weekly maximum"><input type="number" min="1" max="40" step=".5" value={settings.maxWeeklyHours} onChange={(event) => updateSetting("maxWeeklyHours", Number(event.target.value))} /></Field>
-              <Field label="Minimum shift"><input type="number" min=".5" max="8" step=".5" value={settings.minShiftHours} onChange={(event) => updateSetting("minShiftHours", Number(event.target.value))} /></Field>
+            <SettingCard title="Student limits" body="Control weekly hours and viable shift length. Shifts are capped at six consecutive hours.">
+              <Field label="Weekly target / maximum"><input type="number" min="1" max="40" step=".5" value={settings.maxWeeklyHours} onChange={(event) => updateSetting("maxWeeklyHours", Number(event.target.value))} /></Field>
+              <Field label="Minimum shift"><input type="number" min=".5" max={MAX_CONSECUTIVE_HOURS} step=".5" value={settings.minShiftHours} onChange={(event) => updateSetting("minShiftHours", Number(event.target.value))} /></Field>
             </SettingCard>
-            <SettingCard title="Coverage target" body="Preferred number of students working at once.">
-              <Field label="Students on duty"><input type="number" min="1" max="5" value={settings.targetCoverage} onChange={(event) => updateSetting("targetCoverage", Number(event.target.value))} /></Field>
+            <SettingCard title="Minimum coverage" body="Minimum number of students working at once. Additional overlap is allowed.">
+              <Field label="Minimum students on duty"><input type="number" min="1" max="5" value={settings.targetCoverage} onChange={(event) => updateSetting("targetCoverage", Number(event.target.value))} /></Field>
               <button className="button primary wide" onClick={makeSchedule}>Regenerate with these rules</button>
             </SettingCard>
           </section>
@@ -507,7 +608,7 @@ export default function SchedulingApp() {
             <button className="modal-close" onClick={() => setModal(null)} aria-label="Close">×</button>
             {modal === "student" && <StudentForm onSubmit={addStudent} />}
             {modal === "class" && <BlockForm students={students} title="Add class block" submitLabel="Add class block" onSubmit={addClass} />}
-            {modal === "shift" && <BlockForm students={students} title="Add work shift" submitLabel="Add shift" onSubmit={addShift} constrained settings={settings} />}
+            {modal === "shift" && <BlockForm students={students.filter((student) => student.active)} title="Add work shift" submitLabel="Add shift" onSubmit={addShift} constrained settings={settings} />}
           </div>
         </div>
       )}
@@ -558,7 +659,7 @@ function ScheduleGrid({
   classBlocks,
   shifts,
   settings,
-  studentFor,
+  students,
   onMove,
   onResize,
   onDelete,
@@ -566,11 +667,16 @@ function ScheduleGrid({
   classBlocks: ClassBlock[];
   shifts: WorkShift[];
   settings: AppSettings;
-  studentFor: (id: string) => Student | undefined;
+  students: Student[];
   onMove: (id: string, day: WorkDay, start: number) => void;
   onResize: (event: ReactPointerEvent, shift: WorkShift) => void;
   onDelete: (id: string) => void;
 }) {
+  const [selectedDay, setSelectedDay] = useState<WorkDay>(0);
+  const activeStudents = useMemo(
+    () => students.filter((student) => student.active),
+    [students],
+  );
   const displayPadding = 1;
   const displayStart = Math.max(0, settings.dayStart - displayPadding);
   const displayEnd = Math.min(24, settings.dayEnd + displayPadding);
@@ -581,78 +687,166 @@ function ScheduleGrid({
   ).filter(
     (time) => time === displayStart || time === displayEnd || Number.isInteger(time),
   );
-  const gridHeight = (displayEnd - displayStart) * PIXELS_PER_HOUR;
+  const timeSpan = displayEnd - displayStart;
+  const timelineMinWidth = timeSpan * PIXELS_PER_HOUR;
+  const timePercent = (time: number) => ((time - displayStart) / timeSpan) * 100;
+
+  function changeDay(direction: -1 | 1) {
+    setSelectedDay((current) => ((current + direction + DAYS.length) % DAYS.length) as WorkDay);
+  }
 
   return (
     <section className="calendar-card">
       <div className="calendar-toolbar">
-        <div><strong>Standard work week</strong></div>
-        <div className="week-label">Monday–Friday <span>•</span> 30-minute increments</div>
+        <button
+          className="day-arrow"
+          type="button"
+          onClick={() => changeDay(-1)}
+          aria-label={`Show ${DAYS[(selectedDay + DAYS.length - 1) % DAYS.length]}`}
+        >
+          <span aria-hidden="true">&lsaquo;</span>
+        </button>
+        <div className="day-title" aria-live="polite">
+          <strong>{DAYS[selectedDay]}</strong>
+          <span>{activeStudents.length} active students <i>&bull;</i> 15-minute increments</span>
+        </div>
+        <button
+          className="day-arrow"
+          type="button"
+          onClick={() => changeDay(1)}
+          aria-label={`Show ${DAYS[(selectedDay + 1) % DAYS.length]}`}
+        >
+          <span aria-hidden="true">&rsaquo;</span>
+        </button>
       </div>
-      <div className="calendar-scroll">
-        <div className="calendar" style={{ gridTemplateRows: `42px ${gridHeight}px` }}>
-          <div className="corner" />
-          {DAYS.map((day) => <div className="day-head" key={day}>{day.slice(0, 3).toUpperCase()}</div>)}
-          <div className="time-column">
+      <div className="daily-calendar-scroll">
+        <div
+          className="daily-calendar"
+          style={{ minWidth: timelineMinWidth + 190 }}
+          role="grid"
+          aria-label={`${DAYS[selectedDay]} work schedule`}
+        >
+          <div className="student-column-head" role="columnheader">Student</div>
+          <div className="timeline-head" style={{ minWidth: timelineMinWidth }} role="columnheader">
             {timeLabels.map((time) => (
-              <span key={time} style={{ top: (time - displayStart) * PIXELS_PER_HOUR }}>
+              <span key={time} style={{ left: `${timePercent(time)}%` }}>
                 {formatTime(time).replace(":00", "")}
               </span>
             ))}
           </div>
-          {DAYS.map((_, dayIndex) => (
-            <div
-              className="day-column"
-              key={dayIndex}
-              style={{ height: gridHeight }}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => {
-                event.preventDefault();
-                const id = event.dataTransfer.getData("text/shift-id");
-                const rect = event.currentTarget.getBoundingClientRect();
-                const offset = Math.max(0, Math.min(gridHeight, event.clientY - rect.top));
-                const start = displayStart + Math.round((offset / PIXELS_PER_HOUR) / SNAP) * SNAP;
-                if (id) onMove(id, dayIndex as WorkDay, start);
-              }}
-            >
-              {Array.from({ length: slotCount }).map((_, index) => {
-                const slotStart = displayStart + index * SNAP;
-                const outsideWorkHours =
-                  slotStart < settings.dayStart || slotStart >= settings.dayEnd;
-                return (
-                  <i
-                    className={`${index % 2 ? "half" : ""} ${outsideWorkHours ? "outside-hours" : ""}`}
-                    key={index}
-                  />
-                );
-              })}
-              {shifts.filter((shift) => shift.day === dayIndex).map((shift) => {
-                const student = studentFor(shift.studentId);
-                const warnings = shiftWarnings(shift, shifts, classBlocks, settings);
-                return (
-                  <article
-                    draggable
-                    onDragStart={(event) => event.dataTransfer.setData("text/shift-id", shift.id)}
-                    className={`shift ${student?.color ?? "blue"} ${warnings.length ? "invalid" : ""}`}
-                    key={shift.id}
-                    style={{
-                      top: (shift.start - displayStart) * PIXELS_PER_HOUR + 3,
-                      height: duration(shift) * PIXELS_PER_HOUR - 6,
-                    }}
-                    title={warnings.length ? warnings.join(", ") : "Drag to move this shift"}
-                  >
-                    <strong>{student?.name ?? "Unknown"}</strong>
-                    <span>{formatTime(shift.start)} – {formatTime(shift.end)}</span>
-                    {warnings.length > 0 && <em>! {warnings[0]}</em>}
-                    <button className="shift-delete" onClick={() => onDelete(shift.id)} aria-label="Delete shift">×</button>
-                    <button className="resize-handle" onPointerDown={(event) => onResize(event, shift)} aria-label="Resize shift">•••</button>
-                  </article>
-                );
-              })}
-            </div>
-          ))}
+          {activeStudents.map((student) => {
+            const studentBlocks = classBlocks.filter(
+              (block) => block.studentId === student.id && block.day === selectedDay,
+            );
+            const studentShifts = shifts.filter(
+              (shift) => shift.studentId === student.id && shift.day === selectedDay,
+            );
+
+            return (
+              <div className="daily-student-row" key={student.id} role="row">
+                <div className="daily-student-name" role="rowheader">
+                  <i className={student.color}>{student.name.slice(0, 1)}</i>
+                  <div>
+                    <strong>{student.name}</strong>
+                    <span>{weeklyHours(student.id, shifts)}h this week</span>
+                  </div>
+                </div>
+                <div
+                  className="student-timeline"
+                  style={{ minWidth: timelineMinWidth }}
+                  role="gridcell"
+                  aria-label={`${student.name}'s ${DAYS[selectedDay]} timeline`}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const id = event.dataTransfer.getData("text/shift-id");
+                    const draggedShift = shifts.find((shift) => shift.id === id);
+                    if (!draggedShift || draggedShift.studentId !== student.id) return;
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    const offset = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+                    const rawStart = displayStart + (offset / rect.width) * timeSpan;
+                    const start = Math.round(rawStart / SNAP) * SNAP;
+                    if (id) onMove(id, selectedDay, start);
+                  }}
+                >
+                  {Array.from({ length: slotCount }).map((_, index) => {
+                    const slotStart = displayStart + index * SNAP;
+                    const slotEnd = slotStart + SNAP;
+                    const quarter = Math.round(slotEnd * 4) % 4;
+                    const outsideWorkHours =
+                      slotStart < settings.dayStart || slotStart >= settings.dayEnd;
+                    return (
+                      <i
+                        className={`${quarter === 0 ? "hour-slot" : quarter === 2 ? "half-slot" : ""} ${outsideWorkHours ? "outside-hours" : ""}`}
+                        key={index}
+                      />
+                    );
+                  })}
+                  {studentBlocks.map((block) => {
+                    const visibleStart = Math.max(block.start, displayStart);
+                    const visibleEnd = Math.min(block.end, displayEnd);
+                    if (visibleEnd <= visibleStart) return null;
+                    return (
+                      <div
+                        className="class-block"
+                        key={block.id}
+                        style={{
+                          left: `${timePercent(visibleStart)}%`,
+                          width: `${((visibleEnd - visibleStart) / timeSpan) * 100}%`,
+                        }}
+                        title={`${block.label ?? "Class"}: ${formatTime(block.start)} - ${formatTime(block.end)}`}
+                      >
+                        <strong>{block.label ?? "Class"}</strong>
+                      </div>
+                    );
+                  })}
+                  {studentShifts.map((shift) => {
+                    const warnings = shiftWarnings(shift, shifts, classBlocks, settings);
+                    const visibleStart = Math.max(shift.start, displayStart);
+                    const visibleEnd = Math.min(shift.end, displayEnd);
+                    if (visibleEnd <= visibleStart) return null;
+                    return (
+                      <article
+                        draggable
+                        onDragStart={(event) => event.dataTransfer.setData("text/shift-id", shift.id)}
+                        className={`shift horizontal ${student.color} ${warnings.length ? "invalid" : ""}`}
+                        key={shift.id}
+                        style={{
+                          left: `calc(${timePercent(visibleStart)}% + 3px)`,
+                          width: `max(42px, calc(${((visibleEnd - visibleStart) / timeSpan) * 100}% - 6px))`,
+                        }}
+                        title={warnings.length ? warnings.join(", ") : "Drag horizontally to move this shift"}
+                      >
+                        <strong>{formatTime(shift.start)} &ndash; {formatTime(shift.end)}</strong>
+                        {warnings.length > 0 && <em>! {warnings[0]}</em>}
+                        <button
+                          className="shift-delete"
+                          onClick={() => onDelete(shift.id)}
+                          aria-label={`Delete ${student.name}'s shift`}
+                        >
+                          &times;
+                        </button>
+                        <button
+                          className="resize-handle horizontal-resize"
+                          onPointerDown={(event) => onResize(event, shift)}
+                          aria-label={`Resize ${student.name}'s shift`}
+                        >
+                          <span aria-hidden="true">&bull;&bull;&bull;</span>
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
         </div>
-        {!shifts.length && <div className="calendar-empty"><strong>No work shifts yet</strong><span>Generate a schedule or add a shift manually.</span></div>}
+        {!activeStudents.length && (
+          <div className="daily-empty">
+            <strong>No active students</strong>
+            <span>Mark a student active to show them in the calendar.</span>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -673,7 +867,7 @@ function BlockForm({ students, title, submitLabel, onSubmit, constrained, settin
   const end = constrained && settings ? settings.dayEnd : 21;
   return (
     <form onSubmit={onSubmit}>
-      <span className="eyebrow">Availability</span><h2>{title}</h2><p>Times snap to 30-minute increments.</p>
+      <span className="eyebrow">Availability</span><h2>{title}</h2><p>Times snap to 15-minute increments.</p>
       <Field label="Student"><select name="studentId" required>{students.map((student) => <option value={student.id} key={student.id}>{student.name}</option>)}</select></Field>
       <Field label="Day"><select name="day">{DAYS.map((day, index) => <option value={index} key={day}>{day}</option>)}</select></Field>
       <div className="field-pair">

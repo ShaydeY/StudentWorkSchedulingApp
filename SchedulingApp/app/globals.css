@@ -73,8 +73,22 @@ nav { display: grid; gap: 6px; }
 .admin strong { font-size: 12px; }
 .admin button { border: 0; background: transparent; color: var(--gray); }
 
-.workspace { min-width: 0; padding: 34px 38px 50px; overflow-x: auto; }
-.topbar { display: flex; justify-content: space-between; align-items: end; gap: 24px; }
+.workspace { min-width: 0; padding: 0 38px 50px; overflow-x: auto; }
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 24px;
+  margin: 0 -38px;
+  padding: 24px 38px 18px;
+  border-bottom: 1px solid rgb(206 211 214 / 82%);
+  background: rgb(255 255 255 / 94%);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 5%);
+  backdrop-filter: blur(12px);
+}
 .topbar h1 { margin: 6px 0 5px; font-size: 32px; line-height: 1; letter-spacing: -.04em; }
 .topbar p { margin: 0; color: var(--muted); font-size: 14px; }
 .actions { display: flex; gap: 10px; }
@@ -150,7 +164,8 @@ nav { display: grid; gap: 6px; }
   .brand { padding: 0; }
   .sidebar nav { display: flex; }
   .rules-card, .admin { display: none; }
-  .workspace { padding: 25px 18px; }
+  .workspace { padding: 0 18px 25px; }
+  .topbar { margin: 0 -18px; padding: 17px 18px 15px; }
   .summary-row { grid-template-columns: repeat(2, 1fr); }
   .summary-row article:nth-child(2) { border-right: 0; }
   .summary-row article:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
