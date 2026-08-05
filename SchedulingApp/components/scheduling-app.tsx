@@ -31,9 +31,11 @@ import {
   getSupabaseBrowserClient,
   isSupabaseConfigured,
 } from "@/lib/supabase/client";
+import { ScannedClassBlock } from "@/lib/schedule-import";
+import ScheduleImporter from "@/components/schedule-importer";
 
 type Tab = "schedule" | "students" | "classes" | "settings";
-type Modal = "shift" | "student" | "class" | null;
+type Modal = "shift" | "student" | "class" | "import" | null;
 
 const COLORS: StudentColor[] = ["coral", "blue", "green", "purple", "gold"];
 const PIXELS_PER_HOUR = 64;
@@ -378,6 +380,27 @@ export default function SchedulingApp() {
     setNotice("Class block added");
   }
 
+  async function getAccessToken() {
+    if (!supabase) return null;
+    const { data } = await supabase.auth.getSession();
+    return data.session?.access_token ?? null;
+  }
+
+  function addScannedClasses(studentId: string, scanned: ScannedClassBlock[]) {
+    const next: ClassBlock[] = scanned.map((block) => ({
+      id: crypto.randomUUID(),
+      studentId,
+      day: block.day,
+      start: block.start,
+      end: block.end,
+      label: block.label || "Class",
+    }));
+    setClassBlocks((current) => [...current, ...next]);
+    next.forEach((block) => void saveClassBlock(block));
+    setModal(null);
+    setNotice(`${next.length} class ${next.length === 1 ? "block" : "blocks"} imported and saved`);
+  }
+
   function addShift(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -469,6 +492,7 @@ export default function SchedulingApp() {
           <div className="actions">
             {tab === "schedule" && <button className="button secondary" onClick={() => setModal("shift")}>＋ Add shift</button>}
             {tab === "students" && <button className="button secondary" onClick={() => setModal("student")}>＋ Add student</button>}
+            {tab === "classes" && <button className="button secondary" onClick={() => setModal("import")} disabled={!students.length}>▣ Scan schedule</button>}
             {tab === "classes" && <button className="button secondary" onClick={() => setModal("class")}>＋ Add class block</button>}
             {tab !== "settings" && <button className="button primary" onClick={makeSchedule}>✦ Generate schedule</button>}
           </div>
@@ -604,11 +628,12 @@ export default function SchedulingApp() {
 
       {modal && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setModal(null)}>
-          <div className="modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+          <div className={`modal ${modal === "import" ? "import-modal" : ""}`} role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
             <button className="modal-close" onClick={() => setModal(null)} aria-label="Close">×</button>
             {modal === "student" && <StudentForm onSubmit={addStudent} />}
             {modal === "class" && <BlockForm students={students} title="Add class block" submitLabel="Add class block" onSubmit={addClass} />}
             {modal === "shift" && <BlockForm students={students.filter((student) => student.active)} title="Add work shift" submitLabel="Add shift" onSubmit={addShift} constrained settings={settings} />}
+            {modal === "import" && <ScheduleImporter students={students} getAccessToken={getAccessToken} onConfirm={addScannedClasses} onClose={() => setModal(null)} />}
           </div>
         </div>
       )}
